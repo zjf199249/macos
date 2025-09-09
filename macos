@@ -813,7 +813,7 @@ generate_user_info() {
     echo "Automation Features" >> "${INFO_FILE}"
     echo "-------------------" >> "${INFO_FILE}"
     echo "• WiFi auto-connection to: ${WIFI_SSID} (first boot only)" >> "${INFO_FILE}"
-    echo "• WiFi cleanup: Guest will be removed when connected to Kwai" >> "${INFO_FILE}"
+    echo "• WiFi cleanup: Guest will be removed when connected to Guest" >> "${INFO_FILE}"
     echo "• PKG software downloaded and cached for installation" >> "${INFO_FILE}"
     echo "• Persistent password change enforcement" >> "${INFO_FILE}"
     echo "• Silent software installation process" >> "${INFO_FILE}"
