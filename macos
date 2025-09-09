@@ -1,0 +1,938 @@
+#!/bin/bash
+
+###################
+# 全局变量定义
+###################
+LOG_FILE="setup_log_v8.txt"
+INFO_FILE="user_info_v8.txt"
+WIFI_SSID="Kwai-Guest"
+WIFI_PASSWORD=""
+
+# 下载URL数组
+DMG_URLS=(
+    "http://192.168.1.1:8000/s/TheUnarchiver.dmg"
+    "http://192.168.1.1:8000/s/QQ.dmg"
+    "http://192.168.1.1:8000/s/weix.dmg"
+)
+
+PKG_URLS=(
+    "http://192.168.1.1:8000/s/sps.pkg"
+)
+
+# 用户信息
+REAL_NAME="Apple"
+USER_NAME="apple"
+USER_ID="501"
+GROUP_ID="20"
+
+###################
+# 工具函数
+###################
+log() {
+    local message="$1"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - ${message}" | tee -a "${LOG_FILE}"
+}
+
+check_success() {
+    if [ $? -ne 0 ]; then
+        log "ERROR: The last command failed. Exiting."
+        exit 1
+    fi
+}
+
+###################
+# 核心功能函数
+###################
+download_pkg_files() {
+    log "Downloading PKG files in Recovery environment..."
+    local pkg_storage_dir="${TARGET_VOL}/usr/local/pkg_cache"
+    mkdir -p "${pkg_storage_dir}"
+
+    for url in "${PKG_URLS[@]}"; do
+        if [ -n "${url}" ]; then
+            local filename=$(basename "${url}")
+            local destination="${pkg_storage_dir}/${filename}"
+            log "Downloading PKG: ${filename}..."
+            
+            local max_retries=3
+            local retry_count=0
+            local download_success=false
+            
+            while [ ${retry_count} -lt ${max_retries} ] && [ "${download_success}" = false ]; do
+                if curl -L -f -o "${destination}" --connect-timeout 30 --max-time 300 "${url}"; then
+                    download_success=true
+                    log "Successfully downloaded: ${filename}"
+                    
+                    if [ -f "${destination}" ] && [ -s "${destination}" ]; then
+                        log "File verification passed: ${filename}"
+                    else
+                        log "WARNING: Downloaded file is empty or corrupted: ${filename}"
+                        rm -f "${destination}"
+                        download_success=false
+                    fi
+                else
+                    retry_count=$((retry_count + 1))
+                    log "Download attempt ${retry_count} failed for: ${filename}"
+                    sleep 5
+                fi
+            done
+            
+            if [ "${download_success}" = false ]; then
+                log "ERROR: Failed to download ${filename} after ${max_retries} attempts"
+            fi
+        fi
+    done
+    
+    chmod 644 "${pkg_storage_dir}"/*.pkg 2>/dev/null
+    log "PKG files downloaded and cached for post-boot installation"
+}
+
+configure_chinese_language() {
+    log "Configuring Chinese language settings..."
+    # 创建系统级语言配置文件
+    local global_prefs_dir="${TARGET_VOL}/Library/Preferences"
+    mkdir -p "${global_prefs_dir}"
+
+    # 设置全局语言偏好
+    /usr/libexec/PlistBuddy -c "Add :AppleLocale string zh_CN" "${global_prefs_dir}/.GlobalPreferences.plist" 2>/dev/null || \
+    /usr/libexec/PlistBuddy -c "Set :AppleLocale zh_CN" "${global_prefs_dir}/.GlobalPreferences.plist"
+
+    /usr/libexec/PlistBuddy -c "Add :AppleLanguages array" "${global_prefs_dir}/.GlobalPreferences.plist" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Delete :AppleLanguages" "${global_prefs_dir}/.GlobalPreferences.plist" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Add :AppleLanguages array" "${global_prefs_dir}/.GlobalPreferences.plist"
+    /usr/libexec/PlistBuddy -c "Add :AppleLanguages:0 string zh-Hans-CN" "${global_prefs_dir}/.GlobalPreferences.plist"
+    /usr/libexec/PlistBuddy -c "Add :AppleLanguages:1 string en-CN" "${global_prefs_dir}/.GlobalPreferences.plist"
+
+    # 设置用户级语言配置
+    local user_prefs_dir="${TARGET_VOL}/Users/${USER_NAME}/Library/Preferences"
+    mkdir -p "${user_prefs_dir}"
+
+    # 复制语言设置到用户配置
+    if [ -f "${global_prefs_dir}/.GlobalPreferences.plist" ]; then
+        cp "${global_prefs_dir}/.GlobalPreferences.plist" "${user_prefs_dir}/.GlobalPreferences.plist" 2>/dev/null || true
+    fi
+
+    # 为用户预创建输入法配置文件
+    cat > "${user_prefs_dir}/com.apple.HIToolbox.plist" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>AppleEnabledInputSources</key>
+    <array>
+        <dict>
+            <key>InputSourceKind</key>
+            <string>Keyboard Layout</string>
+            <key>KeyboardLayout ID</key>
+            <integer>252</integer>
+            <key>KeyboardLayout Name</key>
+            <string>ABC</string>
+        </dict>
+        <dict>
+            <key>Bundle ID</key>
+            <string>com.apple.inputmethod.SCIM</string>
+            <key>Input Mode</key>
+            <string>com.apple.inputmethod.SCIM.ITABC</string>
+            <key>InputSourceKind</key>
+            <string>Input Mode</string>
+        </dict>
+    </array>
+    <key>AppleCurrentInputSources</key>
+    <array>
+        <dict>
+            <key>Bundle ID</key>
+            <string>com.apple.inputmethod.SCIM</string>
+            <key>Input Mode</key>
+            <string>com.apple.inputmethod.SCIM.ITABC</string>
+            <key>InputSourceKind</key>
+            <string>Input Mode</string>
+        </dict>
+    </array>
+</dict>
+</plist>
+EOF
+
+    # 设置正确的文件权限
+    chown -R ${USER_ID}:${GROUP_ID} "${user_prefs_dir}" 2>/dev/null || true
+    chmod 644 "${user_prefs_dir}/com.apple.HIToolbox.plist"
+    log "Chinese language and input method configuration completed"
+}
+
+configure_location_services() {
+    log "Pre-configuring location services..."
+    # 创建位置服务配置目录
+    local location_prefs_dir="${TARGET_VOL}/var/db/locationd"
+    mkdir -p "${location_prefs_dir}"
+
+    # 创建 Library 目录下的配置
+    local lib_location_dir="${TARGET_VOL}/Library/Preferences/com.apple.locationd"
+    mkdir -p "${lib_location_dir}"
+
+    # 启用位置服务的全局配置
+    cat > "${TARGET_VOL}/Library/Preferences/com.apple.locationd.plist" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>LocationServicesEnabled</key>
+    <integer>1</integer>
+</dict>
+</plist>
+EOF
+
+    # 设置正确的权限
+    chmod 644 "${TARGET_VOL}/Library/Preferences/com.apple.locationd.plist"
+    log "Location services pre-configuration completed"
+}
+
+# 新增：创建 WiFi 清理脚本
+create_wifi_cleanup_script() {
+    log "Creating WiFi cleanup script..."
+    local script_dir="${TARGET_VOL}/usr/local/bin"
+    local script_path="${script_dir}/wifi_cleanup.sh"
+    
+    cat > "${script_path}" << 'EOF'
+#!/bin/bash
+
+LOG_FILE="/var/log/wifi_cleanup.log"
+COMPLETION_FLAG="/usr/local/.wifi_cleanup_done"
+
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "${LOG_FILE}"
+}
+
+get_current_wifi() {
+    # 使用 system_profiler 获取当前 WiFi
+    local ssid=$(system_profiler SPAirPortDataType 2>/dev/null | awk '/Current Network Information:/{getline; if($0 ~ /^[[:space:]]+[^[:space:]].*:$/) {gsub(/[[:space:]]*:$/, "", $0); gsub(/^[[:space:]]+/, "", $0); print $0; exit}}')
+    echo "${ssid}"
+}
+
+remove_wifi_network() {
+    local ssid="$1"
+    log_message "Attempting to remove WiFi network: ${ssid}"
+    
+    # 尝试移除网络
+    local output=$(networksetup -removepreferredwirelessnetwork en0 "${ssid}" 2>&1)
+    
+    if [ $? -eq 0 ]; then
+        log_message "✅ Successfully removed ${ssid}"
+        # 发送通知
+        osascript -e "display notification \"已自动移除 ${ssid} WiFi 配置\" with title \"WiFi 管理\" sound name \"Glass\"" 2>/dev/null
+        return 0
+    else
+        # 如果需要权限，使用 AppleScript
+        if [[ "${output}" =~ "requires admin" ]]; then
+            log_message "Requires admin privileges, using AppleScript..."
+            osascript -e "do shell script \"networksetup -removepreferredwirelessnetwork en0 '${ssid}'\" with administrator privileges" 2>/dev/null
+            if [ $? -eq 0 ]; then
+                log_message "✅ Successfully removed ${ssid} with admin privileges"
+                return 0
+            fi
+        fi
+        log_message "❌ Failed to remove ${ssid}"
+        return 1
+    fi
+}
+
+cleanup_self() {
+    log_message "Cleaning up WiFi cleanup script..."
+    
+    # 标记为已完成
+    touch "${COMPLETION_FLAG}"
+    
+    # 卸载并删除 LaunchDaemon
+    launchctl unload /Library/LaunchDaemons/com.company.wificleanup.plist 2>/dev/null
+    rm -f /Library/LaunchDaemons/com.company.wificleanup.plist
+    
+    # 删除脚本自身
+    rm -f /usr/local/bin/wifi_cleanup.sh
+    
+    log_message "WiFi cleanup script removed successfully"
+}
+
+main() {
+    # 如果已经执行过，直接退出
+    if [ -f "${COMPLETION_FLAG}" ]; then
+        exit 0
+    fi
+    
+    log_message "WiFi cleanup script started"
+    
+    # 等待系统完全启动
+    sleep 30
+    
+    # 最多尝试500次，每次间隔30秒
+    local max_attempts=500
+    local attempt=1
+    
+    while [ ${attempt} -le ${max_attempts} ]; do
+        log_message "Attempt ${attempt}/${max_attempts}"
+        
+        # 获取当前 WiFi
+        local current_wifi=$(get_current_wifi)
+        
+        if [ -n "${current_wifi}" ]; then
+            log_message "Current WiFi: ${current_wifi}"
+            
+            # 如果连接到 Kwai，尝试移除 Kwai-Guest
+            if [ "${current_wifi}" = "Kwai" ]; then
+                log_message "Connected to Kwai, checking for Kwai-Guest..."
+                
+                # 检查 Kwai-Guest 是否存在
+                if networksetup -listpreferredwirelessnetworks en0 | grep -q "Kwai-Guest"; then
+                    if remove_wifi_network "Kwai-Guest"; then
+                        log_message "Mission accomplished!"
+                        cleanup_self
+                        exit 0
+                    fi
+                else
+                    log_message "Kwai-Guest not found in saved networks"
+                    cleanup_self
+                    exit 0
+                fi
+            else
+                log_message "Not connected to Kwai (current: ${current_wifi})"
+            fi
+        else
+            log_message "No WiFi connection detected"
+        fi
+        
+        # 等待下次尝试
+        sleep 30
+        attempt=$((attempt + 1))
+    done
+    
+    log_message "Max attempts reached, giving up"
+    cleanup_self
+}
+
+main
+exit 0
+EOF
+
+    chmod +x "${script_path}"
+    
+    # 创建 LaunchDaemon 以在启动时运行
+    cat > "${TARGET_VOL}/Library/LaunchDaemons/com.company.wificleanup.plist" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.company.wificleanup</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/wifi_cleanup.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>PathState</key>
+        <dict>
+            <key>/usr/local/.wifi_cleanup_done</key>
+            <false/>
+        </dict>
+    </dict>
+    <key>StartInterval</key>
+    <integer>60</integer>
+</dict>
+</plist>
+EOF
+
+    chmod 644 "${TARGET_VOL}/Library/LaunchDaemons/com.company.wificleanup.plist"
+    log "WiFi cleanup script configured"
+}
+
+create_post_boot_script() {
+    log "Creating post-boot automation script..."
+    local script_dir="${TARGET_VOL}/usr/local/bin"
+    local script_path="${script_dir}/post_boot_setup.sh"
+    mkdir -p "${script_dir}"
+
+    cat > "${script_path}" << 'EOF'
+#!/bin/bash
+
+LOG_FILE="/var/log/post_boot_setup.log"
+PKG_CACHE_DIR="/usr/local/pkg_cache"
+FIRST_BOOT_FLAG="/usr/local/.first_boot_complete"
+
+log_message() {
+    echo "$(date +%Y-%m-%d_%H:%M:%S) - $1" >> "${LOG_FILE}"
+}
+
+# 检查是否是首次启动
+is_first_boot() {
+    if [ -f "${FIRST_BOOT_FLAG}" ]; then
+        return 1  # 不是首次启动
+    else
+        return 0  # 是首次启动
+    fi
+}
+
+configure_language() {
+    log_message "Configuring Chinese language on first boot..."
+    defaults write /Library/Preferences/.GlobalPreferences AppleLocale "zh_CN"
+    defaults write /Library/Preferences/.GlobalPreferences AppleLanguages -array "zh-Hans-CN" "en-CN"
+    defaults write NSGlobalDomain AppleLocale "zh_CN"
+    defaults write NSGlobalDomain AppleLanguages -array "zh-Hans-CN" "en-CN"
+    log_message "Language configuration completed"
+}
+
+setup_input_methods() {
+    log_message "Setting up default input methods..."
+    local current_user=$(whoami)
+    log_message "Configuring input methods for user: ${current_user}"
+    
+    defaults write ~/Library/Preferences/com.apple.HIToolbox AppleEnabledInputSources -array \
+        '{"InputSourceKind"="Keyboard Layout";"KeyboardLayout ID"=252;"KeyboardLayout Name"="ABC";}' \
+        '{"Bundle ID"="com.apple.inputmethod.SCIM";"InputSourceKind"="Input Mode";"Input Mode"="com.apple.inputmethod.SCIM.ITABC";}'
+    
+    defaults write ~/Library/Preferences/com.apple.HIToolbox AppleCurrentInputSources -array \
+        '{"InputSourceKind"="Input Mode";"Bundle ID"="com.apple.inputmethod.SCIM";"Input Mode"="com.apple.inputmethod.SCIM.ITABC";}'
+    
+    /System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings -u 2>/dev/null || true
+    log_message "Input methods configured with Simplified Chinese Pinyin"
+}
+
+enable_location_services() {
+    log_message "Enabling location services..."
+    sudo defaults write /var/db/locationd/Library/Preferences/ByHost/com.apple.locationd LocationServicesEnabled -int 1
+    sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.locationd.plist 2>/dev/null || true
+    
+    sudo /usr/libexec/PlistBuddy -c "Set :LocationServicesEnabled 1" /var/db/locationd/Library/Preferences/ByHost/com.apple.locationd.plist 2>/dev/null || \
+    sudo /usr/libexec/PlistBuddy -c "Add :LocationServicesEnabled integer 1" /var/db/locationd/Library/Preferences/ByHost/com.apple.locationd.plist 2>/dev/null || true
+    
+    defaults write com.apple.security.privacy.location-services LocationServicesEnabled -bool true
+    sudo killall -HUP locationd 2>/dev/null || true
+    log_message "Location services enabled"
+}
+
+connect_wifi() {
+    log_message "Starting WiFi connection process (first boot only)..."
+    sleep 15
+    local wifi_device=""
+    local attempts=0
+    local max_attempts=10
+    
+    while [ -z "${wifi_device}" ] && [ ${attempts} -lt ${max_attempts} ]; do
+        wifi_device=$(networksetup -listallhardwareports | grep -A 1 "Wi-Fi\|AirPort" | grep "Device:" | awk '{print $2}')
+        if [ -z "${wifi_device}" ]; then
+            log_message "WiFi device not found, waiting... (attempt $((attempts + 1)))"
+            sleep 3
+            attempts=$((attempts + 1))
+        fi
+    done
+
+    if [ -n "${wifi_device}" ]; then
+        log_message "Found WiFi device: ${wifi_device}"
+        networksetup -setairportpower "${wifi_device}" on
+        sleep 5
+        log_message "Attempting to connect to Kwai-Guest (first boot only)..."
+        networksetup -setairportnetwork "${wifi_device}" "Kwai-Guest"
+        sleep 10
+        
+        if ping -c 3 www.apple.com >/dev/null 2>&1; then
+            log_message "WiFi connection successful - Internet access confirmed"
+        else
+            log_message "WiFi connected but no internet access"
+        fi
+    else
+        log_message "ERROR: No WiFi device found after multiple attempts"
+    fi
+}
+
+install_packages_silently() {
+    log_message "Starting silent PKG installation..."
+    if [ ! -d "${PKG_CACHE_DIR}" ]; then
+        log_message "ERROR: PKG cache directory not found: ${PKG_CACHE_DIR}"
+        return 1
+    fi
+
+    local pkg_files=($(find "${PKG_CACHE_DIR}" -name "*.pkg" -type f 2>/dev/null))
+    if [ ${#pkg_files[@]} -eq 0 ]; then
+        log_message "WARNING: No PKG files found in cache directory"
+        return 1
+    fi
+
+    log_message "Found ${#pkg_files[@]} PKG files to install"
+    for pkg_file in "${pkg_files[@]}"; do
+        local filename=$(basename "${pkg_file}")
+        log_message "Installing PKG: ${filename}"
+        if installer -pkg "${pkg_file}" -target / -verboseR >> "${LOG_FILE}" 2>&1; then
+            log_message "Successfully installed: ${filename}"
+        else
+            log_message "ERROR: Failed to install: ${filename}"
+        fi
+        sleep 2
+    done
+    log_message "PKG installation process completed"
+}
+
+cleanup_and_exit() {
+    log_message "Cleaning up and removing post-boot automation..."
+    
+    # 标记首次启动已完成
+    touch "${FIRST_BOOT_FLAG}"
+    
+    # 清理 PKG 缓存
+    rm -rf "${PKG_CACHE_DIR}"
+    
+    # 卸载并删除 LaunchDaemon
+    launchctl unload /Library/LaunchDaemons/com.company.postboot.plist 2>/dev/null
+    rm -f /Library/LaunchDaemons/com.company.postboot.plist
+    
+    # 删除脚本自身
+    rm -f /usr/local/bin/post_boot_setup.sh
+    
+    log_message "Post-boot setup completed and cleaned up successfully"
+}
+
+main() {
+    log_message "========== Post-boot setup started =========="
+    
+    # 检查是否是首次启动
+    if ! is_first_boot; then
+        log_message "Not first boot, cleaning up and exiting..."
+        cleanup_and_exit
+        exit 0
+    fi
+    
+    # 等待用户登录
+    while [ -z "$(who | grep console)" ]; do
+        sleep 5
+    done
+    
+    log_message "User login detected, starting first boot automation..."
+    
+    # 执行首次启动配置
+    configure_language
+    setup_input_methods
+    enable_location_services
+    connect_wifi  # 只在首次启动时连接 Kwai-Guest
+    install_packages_silently
+    
+    # 清理并退出
+    cleanup_and_exit
+    
+    log_message "========== Post-boot setup completed =========="
+}
+
+main
+exit 0
+EOF
+
+    chmod +x "${script_path}"
+
+    # 修改 LaunchDaemon，确保只运行一次
+    cat > "${TARGET_VOL}/Library/LaunchDaemons/com.company.postboot.plist" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.company.postboot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/post_boot_setup.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>LaunchOnlyOnce</key>
+    <true/>
+</dict>
+</plist>
+EOF
+
+    chmod 644 "${TARGET_VOL}/Library/LaunchDaemons/com.company.postboot.plist"
+    log "Enhanced post-boot automation configured (first boot only)"
+}
+
+create_password_change_system() {
+    log "Creating persistent password change system..."
+    local user_home="${TARGET_VOL}/Users/${USER_NAME}"
+    local script_dir="${TARGET_VOL}/usr/local/bin"
+    local launch_agent_dir="${user_home}/Library/LaunchAgents"
+    
+    mkdir -p "${script_dir}"
+    mkdir -p "${launch_agent_dir}"
+    
+    printf '%s\n' "${INITIAL_PASSWORD}" > "${TARGET_VOL}/usr/local/.initial_password"
+    printf '%s\n' "${SERIAL_NUMBER}" > "${TARGET_VOL}/usr/local/.device_serial"
+
+    cat > "${script_dir}/password_enforcer.sh" << 'EOF'
+#!/bin/bash
+USERNAME="apple"
+INITIAL_PASSWORD_FILE="/usr/local/.initial_password"
+SERIAL_FILE="/usr/local/.device_serial"
+CHANGED_FLAG="/usr/local/.password_changed"
+LOG_FILE="/var/log/password_enforcer.log"
+
+log_message() {
+    echo "$(date +%Y-%m-%d_%H:%M:%S) - $1" >> "${LOG_FILE}"
+}
+
+check_password_change_needed() {
+    if [ -f "${CHANGED_FLAG}" ]; then
+        return 1
+    fi
+    
+    if [ ! -f "${INITIAL_PASSWORD_FILE}" ]; then
+        log_message "Initial password file not found"
+        return 1
+    fi
+    
+    local initial_password=$(cat "${INITIAL_PASSWORD_FILE}")
+    if dscl . -authonly "${USERNAME}" "${initial_password}" 2>/dev/null; then
+        log_message "User is still using initial password - forcing change"
+        return 0
+    else
+        log_message "User has changed password - marking as complete"
+        touch "${CHANGED_FLAG}"
+        cleanup_system
+        return 1
+    fi
+}
+
+show_password_change_dialog() {
+    log_message "Showing password change dialog"
+    osascript -e 'tell application "System Events" to display dialog "首次登录请立即修改开机密码\n\n为了您的账户安全，必须修改默认密码。\n\n请前往系统偏好设置 > 触控ID与密码 更改密码。" buttons {"前往修改"} default button "前往修改" with title "安全提示 - 必须修改密码"'
+    open "x-apple.systempreferences:com.apple.Touch-ID-Settings"
+    log_message "Password change dialog completed"
+}
+
+cleanup_system() {
+    log_message "Cleaning up password enforcement system"
+    rm -f "${INITIAL_PASSWORD_FILE}"
+    rm -f "${SERIAL_FILE}"
+    
+    local launch_agent="/Users/${USERNAME}/Library/LaunchAgents/com.company.passwordenforcer.plist"
+    if [ -f "${launch_agent}" ]; then
+        launchctl unload "${launch_agent}" 2>/dev/null
+        rm -f "${launch_agent}"
+    fi
+    
+    rm -f "/usr/local/bin/password_enforcer.sh"
+    log_message "Password enforcement system cleaned up"
+}
+
+main() {
+    log_message "Password enforcer started"
+    while [ -z "$(who | grep console)" ]; do
+        sleep 2
+    done
+    
+    sleep 10
+    
+    if check_password_change_needed; then
+        show_password_change_dialog
+    else
+        log_message "Password change not needed"
+        cleanup_system
+    fi
+}
+
+main
+exit 0
+EOF
+
+    chmod +x "${script_dir}/password_enforcer.sh"
+
+    cat > "${launch_agent_dir}/com.company.passwordenforcer.plist" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.company.passwordenforcer</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/password_enforcer.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>30</integer>
+    <key>KeepAlive</key>
+    <false/>
+</dict>
+</plist>
+EOF
+
+    cat > "${script_dir}/password_monitor.sh" << 'EOF'
+#!/bin/bash
+USERNAME="apple"
+INITIAL_PASSWORD_FILE="/usr/local/.initial_password"
+CHANGED_FLAG="/usr/local/.password_changed"
+
+while [ ! -f "${CHANGED_FLAG}" ]; do
+    sleep 60
+    if [ -f "${INITIAL_PASSWORD_FILE}" ]; then
+        initial_password=$(cat "${INITIAL_PASSWORD_FILE}")
+        if dscl . -authonly "${USERNAME}" "${initial_password}" 2>/dev/null; then
+            osascript -e 'display notification "请修改您的登录密码以确保账户安全" with title "安全提醒"' 2>/dev/null
+        else
+            touch "${CHANGED_FLAG}"
+            break
+        fi
+    else
+        break
+    fi
+done
+exit 0
+EOF
+
+    chmod +x "${script_dir}/password_monitor.sh"
+
+    cat > "${launch_agent_dir}/com.company.passwordmonitor.plist" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.company.passwordmonitor</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/password_monitor.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+EOF
+
+    chown -R ${USER_ID}:${GROUP_ID} "${launch_agent_dir}"
+    log "Persistent password change system configured"
+}
+
+install_dmg_software() {
+    log "Step 4: Installing DMG software..."
+    
+    DOWNLOAD_DIR=$(mktemp -d)
+    log "Download directory: ${DOWNLOAD_DIR}"
+    
+    for url in "${DMG_URLS[@]}"; do
+        FILENAME=$(basename "${url}")
+        DESTINATION="${DOWNLOAD_DIR}/${FILENAME}"
+        
+        log "Downloading ${FILENAME}..."
+        curl -L -s -o "${DESTINATION}" "${url}"
+        
+        if [ $? -ne 0 ]; then
+            log "WARNING: Failed to download ${FILENAME}. Skipping."
+            continue
+        fi
+        
+        log "Download complete: ${FILENAME}"
+        log "Processing DMG: ${FILENAME}"
+        
+        MOUNT_INFO_PLIST=$(hdiutil attach -nobrowse -noverify -plist "${DESTINATION}" 2>/dev/null)
+        
+        if [ $? -ne 0 ]; then
+            log "WARNING: Failed to mount ${FILENAME}. Skipping."
+            continue
+        fi
+        
+        MOUNT_POINT=$(echo "${MOUNT_INFO_PLIST}" | grep -A1 'mount-point' | tail -n1 | sed -e 's/.*<string>//' -e 's/<\/string>.*//')
+        
+        if [ -z "${MOUNT_POINT}" ] || [ ! -d "${MOUNT_POINT}" ]; then
+            log "WARNING: Could not determine mount point for ${FILENAME}. Skipping."
+            continue
+        fi
+        
+        log "DMG mounted at: ${MOUNT_POINT}"
+        
+        APP_PATH=$(find "${MOUNT_POINT}" -name "*.app" -maxdepth 2 | head -n 1)
+        if [ -n "${APP_PATH}" ]; then
+            log "Installing: $(basename "${APP_PATH}")"
+            cp -R "${APP_PATH}" "${TARGET_VOL}/Applications/"
+            if [ $? -eq 0 ]; then
+                log "Successfully installed: $(basename "${APP_PATH}")"
+            else
+                log "WARNING: Failed to install: $(basename "${APP_PATH}")"
+            fi
+        else
+            log "WARNING: No .app found in ${FILENAME}"
+        fi
+        
+        hdiutil detach "${MOUNT_POINT}" -quiet 2>/dev/null
+    done
+    
+    log "Cleaning up DMG downloads..."
+    rm -rf "${DOWNLOAD_DIR}"
+}
+
+create_user_account() {
+    log "Step 3: Creating user account..."
+    
+    DSCL_PATH="${TARGET_VOL}/var/db/dslocal/nodes/Default"
+    
+    log "Creating user record for '${USER_NAME}'..."
+    dscl -f "${DSCL_PATH}" localonly -create "/Local/Default/Users/${USER_NAME}"
+    check_success
+    
+    log "Setting user attributes..."
+    dscl -f "${DSCL_PATH}" localonly -create "/Local/Default/Users/${USER_NAME}" RealName "${REAL_NAME}"
+    dscl -f "${DSCL_PATH}" localonly -create "/Local/Default/Users/${USER_NAME}" UniqueID "${USER_ID}"
+    dscl -f "${DSCL_PATH}" localonly -create "/Local/Default/Users/${USER_NAME}" PrimaryGroupID "${GROUP_ID}"
+    dscl -f "${DSCL_PATH}" localonly -create "/Local/Default/Users/${USER_NAME}" UserShell "/bin/zsh"
+    dscl -f "${DSCL_PATH}" localonly -create "/Local/Default/Users/${USER_NAME}" NFSHomeDirectory "/Users/${USER_NAME}"
+    
+    log "Setting initial password..."
+    dscl -f "${DSCL_PATH}" localonly -passwd "/Local/Default/Users/${USER_NAME}" "${INITIAL_PASSWORD}"
+    check_success
+    
+    log "Adding to admin group..."
+    dscl -f "${DSCL_PATH}" localonly -append "/Local/Default/Groups/admin" GroupMembership "${USER_NAME}"
+    check_success
+    
+    log "Creating home directory..."
+    mkdir -p "${TARGET_VOL}/Users/${USER_NAME}/Library/LaunchAgents"
+    chown -R ${USER_ID}:${GROUP_ID} "${TARGET_VOL}/Users/${USER_NAME}"
+    check_success
+    
+    log "User account created successfully."
+}
+
+generate_user_info() {
+    log "Step 10: Generating user information..."
+    
+    echo "macOS Automated Setup Report (v8)" > "${INFO_FILE}"
+    echo "========================================" >> "${INFO_FILE}"
+    echo "Date: $(date)" >> "${INFO_FILE}"
+    echo "Serial Number: ${SERIAL_NUMBER}" >> "${INFO_FILE}"
+    echo "" >> "${INFO_FILE}"
+    echo "Created User Account" >> "${INFO_FILE}"
+    echo "--------------------" >> "${INFO_FILE}"
+    echo "Username: ${USER_NAME}" >> "${INFO_FILE}"
+    echo "Display Name: ${REAL_NAME}" >> "${INFO_FILE}"
+    echo "Initial Password: ${INITIAL_PASSWORD}" >> "${INFO_FILE}"
+    echo "" >> "${INFO_FILE}"
+    echo "Automation Features" >> "${INFO_FILE}"
+    echo "-------------------" >> "${INFO_FILE}"
+    echo "• WiFi auto-connection to: ${WIFI_SSID} (first boot only)" >> "${INFO_FILE}"
+    echo "• WiFi cleanup: Kwai-Guest will be removed when connected to Kwai" >> "${INFO_FILE}"
+    echo "• PKG software downloaded and cached for installation" >> "${INFO_FILE}"
+    echo "• Persistent password change enforcement" >> "${INFO_FILE}"
+    echo "• Silent software installation process" >> "${INFO_FILE}"
+    echo "• Chinese language interface" >> "${INFO_FILE}"
+    echo "• Simplified Chinese Pinyin input method configured" >> "${INFO_FILE}"
+    echo "• Location services automatically enabled" >> "${INFO_FILE}"
+    echo "" >> "${INFO_FILE}"
+    echo "Setup Phase Completed" >> "${INFO_FILE}"
+    echo "---------------------" >> "${INFO_FILE}"
+    echo "• Setup Assistant skipped" >> "${INFO_FILE}"
+    echo "• User account created with admin privileges" >> "${INFO_FILE}"
+    echo "• DMG applications installed in Recovery" >> "${INFO_FILE}"
+    echo "• PKG files downloaded and cached" >> "${INFO_FILE}"
+    echo "• Post-boot scripts configured (runs once)" >> "${INFO_FILE}"
+    echo "• Password monitoring enabled" >> "${INFO_FILE}"
+    echo "• Location services pre-configured" >> "${INFO_FILE}"
+    echo "• WiFi cleanup script installed" >> "${INFO_FILE}"
+    echo "" >> "${INFO_FILE}"
+    echo "Important Notes" >> "${INFO_FILE}"
+    echo "---------------" >> "${INFO_FILE}"
+    echo "1. PKG software will install silently after first boot" >> "${INFO_FILE}"
+    echo "2. Password must be changed from default" >> "${INFO_FILE}"
+    echo "3. System will boot with:" >> "${INFO_FILE}"
+    echo "   - Chinese language interface" >> "${INFO_FILE}"
+    echo "   - Simplified Chinese Pinyin input method" >> "${INFO_FILE}"
+    echo "   - Location services enabled" >> "${INFO_FILE}"
+    echo "   - WiFi management active" >> "${INFO_FILE}"
+    echo "4. Kwai-Guest WiFi connection is for first boot only" >> "${INFO_FILE}"
+    echo "" >> "${INFO_FILE}"
+    echo "DMG Software Installed" >> "${INFO_FILE}"
+    echo "----------------------" >> "${INFO_FILE}"
+    
+    if [ -d "${TARGET_VOL}/Applications" ]; then
+        ls -1 "${TARGET_VOL}/Applications" | grep -E "\.app$" | sed 's/\.app$//' >> "${INFO_FILE}"
+    fi
+    
+    echo "" >> "${INFO_FILE}"
+    echo "PKG Software (for post-boot installation)" >> "${INFO_FILE}"
+    echo "-----------------------------------------" >> "${INFO_FILE}"
+    
+    for url in "${PKG_URLS[@]}"; do
+        if [ -n "${url}" ]; then
+            echo "• $(basename "${url}")" >> "${INFO_FILE}"
+        fi
+    done
+    
+    if [ -d "${TARGET_VOL}/usr/local/pkg_cache" ]; then
+        echo "" >> "${INFO_FILE}"
+        echo "PKG Cache Status" >> "${INFO_FILE}"
+        echo "----------------" >> "${INFO_FILE}"
+        ls -la "${TARGET_VOL}/usr/local/pkg_cache/" >> "${INFO_FILE}" 2>/dev/null
+    fi
+}
+
+# 主程序开始
+printf '' > "${LOG_FILE}"
+printf '' > "${INFO_FILE}"
+
+log "=================================================="
+log "Starting macOS Automated Setup Script (v8)"
+log "=================================================="
+
+log "Step 1: Performing pre-flight checks..."
+log "Checking for internet connection..."
+if ! ping -c 3 www.apple.com > /dev/null 2>&1; then
+    log "ERROR: No internet connection detected."
+    log "Please connect to a Wi-Fi network from the menu bar and run the script again."
+    exit 1
+fi
+log "Internet connection confirmed."
+
+log "Searching for the target macOS volume..."
+TARGET_VOL=$(diskutil list | grep "Macintosh HD" | awk '{print $NF}' | xargs -I{} find /Volumes -name {} 2>/dev/null | head -1)
+if [ -z "${TARGET_VOL}" ] || [ ! -d "${TARGET_VOL}" ]; then
+    TARGET_VOL="/Volumes/Macintosh HD"
+fi
+
+if [ ! -d "${TARGET_VOL}" ]; then
+    log "ERROR: Target volume '${TARGET_VOL}' not found."
+    exit 1
+fi
+log "Target macOS volume found at: ${TARGET_VOL}"
+
+# 执行各个步骤
+log "Step 2: Configuring the system..."
+log "Creating file to skip Setup Assistant..."
+touch "${TARGET_VOL}/var/db/.AppleSetupDone"
+check_success
+
+log "Retrieving device serial number..."
+SERIAL_NUMBER=$(ioreg -l | grep IOPlatformSerialNumber | awk '{print $4}' | tr -d '"')
+if [ -z "${SERIAL_NUMBER}" ]; then
+    log "ERROR: Could not retrieve serial number."
+    exit 1
+fi
+log "Serial Number: ${SERIAL_NUMBER}"
+INITIAL_PASSWORD=$(echo "${SERIAL_NUMBER}" | tail -c 7 | head -c 6)
+log "Initial password set to last 6 digits of SN: ${INITIAL_PASSWORD}"
+
+# 执行其他配置步骤
+create_user_account
+install_dmg_software
+download_pkg_files
+configure_chinese_language
+configure_location_services
+create_post_boot_script
+create_wifi_cleanup_script
+create_password_change_system
+generate_user_info
+
+log "Setup complete! User info saved to: ${INFO_FILE}"
+log "=================================================="
+log "Script finished successfully!"
+log "Chinese interface with Pinyin input method configured"
+log "Location services will be enabled on first boot"
+log "WiFi cleanup will run automatically on boot"
+log "Kwai-Guest connection is for first boot only"
+log "You can now reboot the Mac."
+log "=================================================="
+
+reboot
+exit 0
