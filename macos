@@ -274,19 +274,19 @@ main() {
         if [ -n "${current_wifi}" ]; then
             log_message "Current WiFi: ${current_wifi}"
             
-            # 如果连接到 Kwai，尝试移除 Kwai-Guest
+            # 如果连接到 Kwai，尝试移除 Guest
             if [ "${current_wifi}" = "Kwai" ]; then
-                log_message "Connected to Kwai, checking for Kwai-Guest..."
+                log_message "Connected to Kwai, checking for Guest..."
                 
-                # 检查 Kwai-Guest 是否存在
-                if networksetup -listpreferredwirelessnetworks en0 | grep -q "Kwai-Guest"; then
-                    if remove_wifi_network "Kwai-Guest"; then
+                # 检查 Guest 是否存在
+                if networksetup -listpreferredwirelessnetworks en0 | grep -q "Guest"; then
+                    if remove_wifi_network "Guest"; then
                         log_message "Mission accomplished!"
                         cleanup_self
                         exit 0
                     fi
                 else
-                    log_message "Kwai-Guest not found in saved networks"
+                    log_message "Guest not found in saved networks"
                     cleanup_self
                     exit 0
                 fi
@@ -428,8 +428,8 @@ connect_wifi() {
         log_message "Found WiFi device: ${wifi_device}"
         networksetup -setairportpower "${wifi_device}" on
         sleep 5
-        log_message "Attempting to connect to Kwai-Guest (first boot only)..."
-        networksetup -setairportnetwork "${wifi_device}" "Kwai-Guest"
+        log_message "Attempting to connect to Guest (first boot only)..."
+        networksetup -setairportnetwork "${wifi_device}" "Guest"
         sleep 10
         
         if ping -c 3 www.apple.com >/dev/null 2>&1; then
@@ -509,7 +509,7 @@ main() {
     configure_language
     setup_input_methods
     enable_location_services
-    connect_wifi  # 只在首次启动时连接 Kwai-Guest
+    connect_wifi  # 只在首次启动时连接 Guest
     install_packages_silently
     
     # 清理并退出
@@ -813,7 +813,7 @@ generate_user_info() {
     echo "Automation Features" >> "${INFO_FILE}"
     echo "-------------------" >> "${INFO_FILE}"
     echo "• WiFi auto-connection to: ${WIFI_SSID} (first boot only)" >> "${INFO_FILE}"
-    echo "• WiFi cleanup: Kwai-Guest will be removed when connected to Kwai" >> "${INFO_FILE}"
+    echo "• WiFi cleanup: Guest will be removed when connected to Kwai" >> "${INFO_FILE}"
     echo "• PKG software downloaded and cached for installation" >> "${INFO_FILE}"
     echo "• Persistent password change enforcement" >> "${INFO_FILE}"
     echo "• Silent software installation process" >> "${INFO_FILE}"
@@ -841,7 +841,7 @@ generate_user_info() {
     echo "   - Simplified Chinese Pinyin input method" >> "${INFO_FILE}"
     echo "   - Location services enabled" >> "${INFO_FILE}"
     echo "   - WiFi management active" >> "${INFO_FILE}"
-    echo "4. Kwai-Guest WiFi connection is for first boot only" >> "${INFO_FILE}"
+    echo "4. Guest WiFi connection is for first boot only" >> "${INFO_FILE}"
     echo "" >> "${INFO_FILE}"
     echo "DMG Software Installed" >> "${INFO_FILE}"
     echo "----------------------" >> "${INFO_FILE}"
@@ -930,7 +930,7 @@ log "Script finished successfully!"
 log "Chinese interface with Pinyin input method configured"
 log "Location services will be enabled on first boot"
 log "WiFi cleanup will run automatically on boot"
-log "Kwai-Guest connection is for first boot only"
+log "Guest connection is for first boot only"
 log "You can now reboot the Mac."
 log "=================================================="
 
