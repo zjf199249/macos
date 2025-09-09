@@ -1,6 +1,6 @@
 # macos
 
-刷机完成后，保持电脑连接网络，进入mac的recovery模式，打开recovery模式下的终端
+刷机完成后，保持电脑连接网络，进入mac的recovery模式，打开recovery模式下的终端，运行macos脚本
 
 （1）跳过开机助手设置
 
