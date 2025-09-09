@@ -274,9 +274,9 @@ main() {
         if [ -n "${current_wifi}" ]; then
             log_message "Current WiFi: ${current_wifi}"
             
-            # 如果连接到 Kwai，尝试移除 Guest
-            if [ "${current_wifi}" = "Kwai" ]; then
-                log_message "Connected to Kwai, checking for Guest..."
+            # 如果连接到 Guest，尝试移除 Guest
+            if [ "${current_wifi}" = "Guest" ]; then
+                log_message "Connected to Guest, checking for Guest..."
                 
                 # 检查 Guest 是否存在
                 if networksetup -listpreferredwirelessnetworks en0 | grep -q "Guest"; then
@@ -291,7 +291,7 @@ main() {
                     exit 0
                 fi
             else
-                log_message "Not connected to Kwai (current: ${current_wifi})"
+                log_message "Not connected to Guest (current: ${current_wifi})"
             fi
         else
             log_message "No WiFi connection detected"
