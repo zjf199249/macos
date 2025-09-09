@@ -5,7 +5,7 @@
 ###################
 LOG_FILE="setup_log_v8.txt"
 INFO_FILE="user_info_v8.txt"
-WIFI_SSID="Kwai-Guest"
+WIFI_SSID="Guest"
 WIFI_PASSWORD=""
 
 # 下载URL数组
