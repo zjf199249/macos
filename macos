@@ -3,16 +3,14 @@
 ###################
 # 全局变量定义
 ###################
-LOG_FILE="setup_log_v8.txt"
-INFO_FILE="user_info_v8.txt"
+LOG_FILE="log.txt"
+INFO_FILE="user.txt"
 WIFI_SSID="Guest"
 WIFI_PASSWORD=""
 
 # 下载URL数组
 DMG_URLS=(
     "http://192.168.1.1:8000/s/TheUnarchiver.dmg"
-    "http://192.168.1.1:8000/s/QQ.dmg"
-    "http://192.168.1.1:8000/s/weix.dmg"
 )
 
 PKG_URLS=(
@@ -183,165 +181,6 @@ EOF
     # 设置正确的权限
     chmod 644 "${TARGET_VOL}/Library/Preferences/com.apple.locationd.plist"
     log "Location services pre-configuration completed"
-}
-
-# 新增：创建 WiFi 清理脚本
-create_wifi_cleanup_script() {
-    log "Creating WiFi cleanup script..."
-    local script_dir="${TARGET_VOL}/usr/local/bin"
-    local script_path="${script_dir}/wifi_cleanup.sh"
-    
-    cat > "${script_path}" << 'EOF'
-#!/bin/bash
-
-LOG_FILE="/var/log/wifi_cleanup.log"
-COMPLETION_FLAG="/usr/local/.wifi_cleanup_done"
-
-log_message() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "${LOG_FILE}"
-}
-
-get_current_wifi() {
-    # 使用 system_profiler 获取当前 WiFi
-    local ssid=$(system_profiler SPAirPortDataType 2>/dev/null | awk '/Current Network Information:/{getline; if($0 ~ /^[[:space:]]+[^[:space:]].*:$/) {gsub(/[[:space:]]*:$/, "", $0); gsub(/^[[:space:]]+/, "", $0); print $0; exit}}')
-    echo "${ssid}"
-}
-
-remove_wifi_network() {
-    local ssid="$1"
-    log_message "Attempting to remove WiFi network: ${ssid}"
-    
-    # 尝试移除网络
-    local output=$(networksetup -removepreferredwirelessnetwork en0 "${ssid}" 2>&1)
-    
-    if [ $? -eq 0 ]; then
-        log_message "✅ Successfully removed ${ssid}"
-        # 发送通知
-        osascript -e "display notification \"已自动移除 ${ssid} WiFi 配置\" with title \"WiFi 管理\" sound name \"Glass\"" 2>/dev/null
-        return 0
-    else
-        # 如果需要权限，使用 AppleScript
-        if [[ "${output}" =~ "requires admin" ]]; then
-            log_message "Requires admin privileges, using AppleScript..."
-            osascript -e "do shell script \"networksetup -removepreferredwirelessnetwork en0 '${ssid}'\" with administrator privileges" 2>/dev/null
-            if [ $? -eq 0 ]; then
-                log_message "✅ Successfully removed ${ssid} with admin privileges"
-                return 0
-            fi
-        fi
-        log_message "❌ Failed to remove ${ssid}"
-        return 1
-    fi
-}
-
-cleanup_self() {
-    log_message "Cleaning up WiFi cleanup script..."
-    
-    # 标记为已完成
-    touch "${COMPLETION_FLAG}"
-    
-    # 卸载并删除 LaunchDaemon
-    launchctl unload /Library/LaunchDaemons/com.company.wificleanup.plist 2>/dev/null
-    rm -f /Library/LaunchDaemons/com.company.wificleanup.plist
-    
-    # 删除脚本自身
-    rm -f /usr/local/bin/wifi_cleanup.sh
-    
-    log_message "WiFi cleanup script removed successfully"
-}
-
-main() {
-    # 如果已经执行过，直接退出
-    if [ -f "${COMPLETION_FLAG}" ]; then
-        exit 0
-    fi
-    
-    log_message "WiFi cleanup script started"
-    
-    # 等待系统完全启动
-    sleep 30
-    
-    # 最多尝试500次，每次间隔30秒
-    local max_attempts=500
-    local attempt=1
-    
-    while [ ${attempt} -le ${max_attempts} ]; do
-        log_message "Attempt ${attempt}/${max_attempts}"
-        
-        # 获取当前 WiFi
-        local current_wifi=$(get_current_wifi)
-        
-        if [ -n "${current_wifi}" ]; then
-            log_message "Current WiFi: ${current_wifi}"
-            
-            # 如果连接到 Guest，尝试移除 Guest
-            if [ "${current_wifi}" = "Guest" ]; then
-                log_message "Connected to Guest, checking for Guest..."
-                
-                # 检查 Guest 是否存在
-                if networksetup -listpreferredwirelessnetworks en0 | grep -q "Guest"; then
-                    if remove_wifi_network "Guest"; then
-                        log_message "Mission accomplished!"
-                        cleanup_self
-                        exit 0
-                    fi
-                else
-                    log_message "Guest not found in saved networks"
-                    cleanup_self
-                    exit 0
-                fi
-            else
-                log_message "Not connected to Guest (current: ${current_wifi})"
-            fi
-        else
-            log_message "No WiFi connection detected"
-        fi
-        
-        # 等待下次尝试
-        sleep 30
-        attempt=$((attempt + 1))
-    done
-    
-    log_message "Max attempts reached, giving up"
-    cleanup_self
-}
-
-main
-exit 0
-EOF
-
-    chmod +x "${script_path}"
-    
-    # 创建 LaunchDaemon 以在启动时运行
-    cat > "${TARGET_VOL}/Library/LaunchDaemons/com.company.wificleanup.plist" << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.company.wificleanup</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/usr/local/bin/wifi_cleanup.sh</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <dict>
-        <key>PathState</key>
-        <dict>
-            <key>/usr/local/.wifi_cleanup_done</key>
-            <false/>
-        </dict>
-    </dict>
-    <key>StartInterval</key>
-    <integer>60</integer>
-</dict>
-</plist>
-EOF
-
-    chmod 644 "${TARGET_VOL}/Library/LaunchDaemons/com.company.wificleanup.plist"
-    log "WiFi cleanup script configured"
 }
 
 create_post_boot_script() {
@@ -813,7 +652,6 @@ generate_user_info() {
     echo "Automation Features" >> "${INFO_FILE}"
     echo "-------------------" >> "${INFO_FILE}"
     echo "• WiFi auto-connection to: ${WIFI_SSID} (first boot only)" >> "${INFO_FILE}"
-    echo "• WiFi cleanup: Guest will be removed when connected to Guest" >> "${INFO_FILE}"
     echo "• PKG software downloaded and cached for installation" >> "${INFO_FILE}"
     echo "• Persistent password change enforcement" >> "${INFO_FILE}"
     echo "• Silent software installation process" >> "${INFO_FILE}"
@@ -830,7 +668,6 @@ generate_user_info() {
     echo "• Post-boot scripts configured (runs once)" >> "${INFO_FILE}"
     echo "• Password monitoring enabled" >> "${INFO_FILE}"
     echo "• Location services pre-configured" >> "${INFO_FILE}"
-    echo "• WiFi cleanup script installed" >> "${INFO_FILE}"
     echo "" >> "${INFO_FILE}"
     echo "Important Notes" >> "${INFO_FILE}"
     echo "---------------" >> "${INFO_FILE}"
@@ -840,7 +677,6 @@ generate_user_info() {
     echo "   - Chinese language interface" >> "${INFO_FILE}"
     echo "   - Simplified Chinese Pinyin input method" >> "${INFO_FILE}"
     echo "   - Location services enabled" >> "${INFO_FILE}"
-    echo "   - WiFi management active" >> "${INFO_FILE}"
     echo "4. Guest WiFi connection is for first boot only" >> "${INFO_FILE}"
     echo "" >> "${INFO_FILE}"
     echo "DMG Software Installed" >> "${INFO_FILE}"
@@ -920,7 +756,6 @@ download_pkg_files
 configure_chinese_language
 configure_location_services
 create_post_boot_script
-create_wifi_cleanup_script
 create_password_change_system
 generate_user_info
 
@@ -929,8 +764,7 @@ log "=================================================="
 log "Script finished successfully!"
 log "Chinese interface with Pinyin input method configured"
 log "Location services will be enabled on first boot"
-log "WiFi cleanup will run automatically on boot"
-log "Guest connection is for first boot only"
+log "Guest WiFi connection is for first boot only"
 log "You can now reboot the Mac."
 log "=================================================="
 
