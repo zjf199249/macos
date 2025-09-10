@@ -19,7 +19,7 @@ PKG_URLS=(
 
 # 用户信息
 REAL_NAME="Apple"
-USER_NAME="apple"
+USER_NAME="Apple"
 USER_ID="501"
 GROUP_ID="20"
 
